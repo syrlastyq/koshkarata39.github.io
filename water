@@ -1,0 +1,594 @@
+import { useState, useRef, useEffect } from "react";
+
+const SYSTEM = `Ты — узкоспециализированный эксперт-бот по теме хвостохранилища Кошкар-Ата.
+
+ОТВЕЧАЙ ТОЛЬКО на вопросы об этих темах:
+- Хвостохранилище Кошкар-Ата: история, расположение, масштаб угрозы
+- Состав отходов: уран, стронций, кобальт, никель, свинец, фосфогипсы
+- Угрозы Каспийскому морю от Кошкар-Ата
+- Токсичная пыль и влияние на жителей Актау (176 000 человек)
+- Заражение грунтовых вод, месторождение Куюлус
+- Рекультивация: ход работ, стоимость 17 млрд тенге
+- Советский период, история создания ХГМЗ
+- Радиоактивное загрязнение Мангистауской области
+- Инцидент февраль 2026 — красная вода Каспия у Актау
+
+ФАКТЫ: 105 млн тонн общий объём отходов, 52 млн тонн радиоактивных, 8 км до Каспия, 5 км до Актау, 20+ лет рекультивация, 17 млрд тенге стоимость, уровень озера ВЫШЕ уровня Каспия.
+
+ЕСЛИ ВОПРОС НЕ ПО ТЕМЕ — отвечай ТОЛЬКО так:
+"🚫 Бұл менің мамандығым емес. / Это не в моей компетенции. Я отвечаю только о хвостохранилище Кошкар-Ата и экологии Мангистауской области."
+
+Стиль: кратко 2-4 предложения, конкретные факты, только русский язык.`;
+
+const SUGS = [
+  "Что такое Кошкар-Ата?",
+  "Угроза Каспию",
+  "Сколько радиоактивных отходов?",
+  "Почему не решают 20 лет?",
+  "Инцидент 2026 года",
+  "Как влияет на Актау?",
+];
+
+const ts = () => new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
+
+// ── colour tokens ──────────────────────────────
+const C = {
+  navy:   "#0D1B2A",
+  navy2:  "#1B2A3C",
+  card:   "#162032",
+  red:    "#E63946",
+  amber:  "#F4A261",
+  teal:   "#4ECDC4",
+  green:  "#52B788",
+  white:  "#F0EDE8",
+  muted:  "#7B96B2",
+};
+
+// ── tiny helpers ───────────────────────────────
+const Box = ({ style, children, ...p }) => (
+  <div style={{ boxSizing: "border-box", ...style }} {...p}>{children}</div>
+);
+
+function StatCard({ num, unit, label, accent }) {
+  return (
+    <Box style={{
+      flex: 1, background: C.card, padding: "2rem 1rem",
+      borderTop: `3px solid ${accent}`, textAlign: "center",
+      minWidth: 120,
+    }}>
+      <div style={{ fontFamily: "Georgia,serif", fontSize: "clamp(2.4rem,5vw,3.5rem)", fontWeight: 900, color: accent, lineHeight: 1 }}>{num}</div>
+      <div style={{ fontSize: ".85rem", fontWeight: 700, color: C.white, margin: ".3rem 0 .5rem" }}>{unit}</div>
+      <div style={{ fontSize: ".75rem", color: C.muted, lineHeight: 1.5 }}>{label}</div>
+    </Box>
+  );
+}
+
+function ThreatCard({ icon, title, body, accent }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <Box
+      style={{
+        flex: 1, minWidth: 220, background: C.card, padding: "1.8rem 1.4rem",
+        borderTop: `2px solid ${hover ? accent : "transparent"}`,
+        borderLeft: `2px solid ${hover ? accent : "rgba(255,255,255,.04)"}`,
+        transition: "all .25s", cursor: "default",
+        transform: hover ? "translateY(-4px)" : "none",
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <div style={{ fontSize: "2rem", marginBottom: ".8rem" }}>{icon}</div>
+      <div style={{ fontWeight: 700, fontSize: "1rem", color: C.white, marginBottom: ".6rem" }}>{title}</div>
+      <div style={{ fontSize: ".82rem", color: C.muted, lineHeight: 1.7 }} dangerouslySetInnerHTML={{ __html: body }} />
+    </Box>
+  );
+}
+
+function TimelineItem({ year, title, body, isLast, highlight }) {
+  return (
+    <Box style={{ display: "flex", gap: "1.2rem", paddingBottom: isLast ? 0 : "2rem" }}>
+      <Box style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+        <Box style={{
+          width: 14, height: 14, borderRadius: "50%",
+          background: highlight ? C.red : C.teal,
+          border: `2px solid ${C.navy}`,
+          boxShadow: `0 0 8px ${highlight ? C.red : C.teal}88`,
+          flexShrink: 0, marginTop: 3,
+        }} />
+        {!isLast && <Box style={{ width: 1, flex: 1, background: "rgba(255,255,255,.1)", marginTop: 4 }} />}
+      </Box>
+      <Box style={{ paddingBottom: isLast ? 0 : "0.5rem" }}>
+        <Box style={{
+          display: "inline-block", padding: ".15rem .6rem", marginBottom: ".5rem",
+          background: highlight ? C.red : C.navy2,
+          fontSize: ".72rem", fontWeight: 700, color: C.white, letterSpacing: 2,
+          fontFamily: "monospace",
+        }}>{year}</Box>
+        <div style={{ fontWeight: 700, color: highlight ? C.red : C.white, marginBottom: ".35rem", fontSize: ".95rem" }}>{title}</div>
+        <div style={{ fontSize: ".82rem", color: C.muted, lineHeight: 1.65, maxWidth: 600 }}>{body}</div>
+      </Box>
+    </Box>
+  );
+}
+
+// ── CHATBOT ────────────────────────────────────
+function ChatBot() {
+  const [open, setOpen]       = useState(false);
+  const [msgs, setMsgs]       = useState([]);
+  const [input, setInput]     = useState("");
+  const [busy, setBusy]       = useState(false);
+  const [showSug, setShowSug] = useState(true);
+  const histRef  = useRef([]);
+  const bottomRef = useRef(null);
+  const inputRef  = useRef(null);
+
+  useEffect(() => {
+    if (open && msgs.length === 0) {
+      setMsgs([{ role: "bot", text: "Сәлем! Здравствуйте! ☢\n\nЯ эксперт-бот по хвостохранилищу Кошкар-Ата. Задайте любой вопрос об этой экологической проблеме.", time: ts() }]);
+    }
+    if (open) setTimeout(() => inputRef.current?.focus(), 300);
+  }, [open]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+
+  async function send(text) {
+    if (!text.trim() || busy) return;
+    setInput("");
+    setShowSug(false);
+    const userMsg = { role: "user", text, time: ts() };
+    setMsgs(m => [...m, userMsg, { role: "typing" }]);
+    histRef.current = [...histRef.current, { role: "user", content: text }];
+    setBusy(true);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 800,
+          system: SYSTEM,
+          messages: histRef.current,
+        }),
+      });
+      const data = await res.json();
+      const reply = (data.content || []).map(b => b.text || "").join("") || "Ошибка. Попробуйте ещё раз.";
+      histRef.current = [...histRef.current, { role: "assistant", content: reply }];
+      setMsgs(m => [...m.filter(x => x.role !== "typing"), { role: "bot", text: reply, time: ts() }]);
+    } catch {
+      setMsgs(m => [...m.filter(x => x.role !== "typing"), { role: "bot", text: "Нет соединения. Попробуйте позже.", time: ts() }]);
+    }
+    setBusy(false);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }
+
+  const pulse = `@keyframes ring-pulse { 0%{opacity:.9;transform:scale(1)} 100%{opacity:0;transform:scale(1.6)} }
+  @keyframes dot-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+  @keyframes slide-up { from{opacity:0;transform:translateY(14px) scale(.96)} to{opacity:1;transform:translateY(0) scale(1)} }
+  @keyframes msg-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }`;
+
+  return (
+    <>
+      <style>{pulse}</style>
+
+      {/* Toggle button */}
+      <Box style={{ position: "fixed", bottom: "2rem", left: "2rem", zIndex: 1000 }}>
+        <Box style={{ position: "relative" }}>
+          {/* pulse ring */}
+          <Box style={{
+            position: "absolute", inset: -6, borderRadius: "50%",
+            border: `2px solid ${C.red}66`,
+            animation: "ring-pulse 2.5s ease-out infinite",
+            pointerEvents: "none",
+          }} />
+          <button onClick={() => setOpen(o => !o)} style={{
+            width: 58, height: 58, borderRadius: "50%",
+            background: open ? "#9b2335" : C.red,
+            border: "none", cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: `0 4px 20px ${C.red}55`,
+            transition: "all .25s",
+          }}>
+            {open
+              ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            }
+          </button>
+        </Box>
+      </Box>
+
+      {/* Chat window */}
+      {open && (
+        <Box style={{
+          position: "fixed", bottom: "6.5rem", left: "2rem", zIndex: 999,
+          width: "min(360px, calc(100vw - 2rem))",
+          height: "min(520px, 70vh)",
+          background: "#0a1520",
+          border: `1px solid ${C.red}55`,
+          boxShadow: "0 16px 50px #00000099",
+          display: "flex", flexDirection: "column", overflow: "hidden",
+          animation: "slide-up .3s ease",
+        }}>
+          {/* Header */}
+          <Box style={{ background: C.card, borderBottom: `1px solid ${C.red}33`, padding: "1rem 1.2rem", display: "flex", alignItems: "center", gap: ".8rem", flexShrink: 0 }}>
+            <Box style={{
+              width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+              background: `${C.red}22`, border: `1.5px solid ${C.red}88`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "1.1rem", position: "relative",
+            }}>
+              ☢
+              <Box style={{ position: "absolute", bottom: 1, right: 1, width: 8, height: 8, borderRadius: "50%", background: C.green, border: `2px solid #0a1520` }} />
+            </Box>
+            <Box style={{ flex: 1 }}>
+              <div style={{ fontFamily: "Georgia,serif", fontWeight: 700, fontSize: ".9rem", letterSpacing: 2, color: C.white, textTransform: "uppercase" }}>Кошкар-Ата Бот</div>
+              <div style={{ fontSize: ".58rem", color: C.muted, letterSpacing: 1.5, marginTop: ".15rem", fontFamily: "monospace" }}>// Эксперт по экологии · Онлайн</div>
+            </Box>
+            <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", padding: ".2rem", display:"flex" }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </Box>
+
+          {/* Messages */}
+          <Box style={{ flex: 1, overflowY: "auto", padding: "1rem", display: "flex", flexDirection: "column", gap: ".85rem" }}>
+            {msgs.map((m, i) => {
+              if (m.role === "typing") return (
+                <Box key={i} style={{ display: "flex", gap: 4, padding: ".7rem .9rem", background: C.card, borderLeft: `2px solid ${C.red}`, width: "fit-content", borderRadius: 2 }}>
+                  {[0, .2, .4].map((d, j) => <span key={j} style={{ width: 6, height: 6, borderRadius: "50%", background: C.red, display: "inline-block", animation: `dot-bounce 1.2s ${d}s ease-in-out infinite` }} />)}
+                </Box>
+              );
+              const isUser = m.role === "user";
+              const isOff  = m.text?.includes("не в моей компетенции") || m.text?.includes("мамандығым");
+              return (
+                <Box key={i} style={{ alignSelf: isUser ? "flex-end" : "flex-start", maxWidth: "88%", animation: "msg-in .25s ease" }}>
+                  <Box style={{
+                    padding: ".65rem .9rem", fontSize: ".8rem", lineHeight: 1.65, borderRadius: 2,
+                    background: isUser ? `${C.red}22` : isOff ? `${C.amber}11` : C.card,
+                    color: isOff ? C.muted : C.white,
+                    borderLeft: isUser ? "none" : `2px solid ${isOff ? C.amber : C.red}`,
+                    borderRight: isUser ? `2px solid ${C.amber}` : "none",
+                    whiteSpace: "pre-wrap",
+                  }}>{m.text}</Box>
+                  <Box style={{ fontSize: ".58rem", color: "#4a6070", marginTop: ".25rem", textAlign: isUser ? "right" : "left", fontFamily: "monospace", letterSpacing: 1 }}>
+                    {isUser ? `вы · ${m.time}` : `☢ бот · ${m.time}`}
+                  </Box>
+                </Box>
+              );
+            })}
+            <div ref={bottomRef} />
+          </Box>
+
+          {/* Suggestions */}
+          {showSug && (
+            <Box style={{ padding: ".5rem 1rem .3rem", display: "flex", flexWrap: "wrap", gap: ".35rem", borderTop: "1px solid rgba(255,255,255,.04)", flexShrink: 0 }}>
+              {SUGS.map(s => (
+                <button key={s} onClick={() => send(s)} disabled={busy} style={{
+                  background: `${C.red}14`, border: `1px solid ${C.red}44`, color: C.muted,
+                  fontSize: ".62rem", padding: ".28rem .6rem", cursor: "pointer",
+                  fontFamily: "inherit", borderRadius: 2, transition: "all .2s",
+                }}
+                  onMouseEnter={e => { e.target.style.background = `${C.red}2a`; e.target.style.color = C.white; }}
+                  onMouseLeave={e => { e.target.style.background = `${C.red}14`; e.target.style.color = C.muted; }}
+                >{s}</button>
+              ))}
+            </Box>
+          )}
+
+          {/* Input */}
+          <Box style={{ background: "#080f18", borderTop: "1px solid rgba(255,255,255,.05)", padding: ".7rem .8rem", display: "flex", gap: ".5rem", flexShrink: 0 }}>
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
+              placeholder="Задайте вопрос о Кошкар-Ата..."
+              disabled={busy}
+              style={{
+                flex: 1, background: C.card, border: "1px solid rgba(255,255,255,.08)",
+                color: C.white, fontFamily: "inherit", fontSize: ".78rem",
+                padding: ".55rem .85rem", outline: "none", borderRadius: 2,
+              }}
+            />
+            <button onClick={() => send(input)} disabled={busy || !input.trim()} style={{
+              background: busy || !input.trim() ? "#2a1a1e" : C.red,
+              border: "none", width: 38, height: 38, borderRadius: 2,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: busy || !input.trim() ? "not-allowed" : "pointer",
+              transition: "background .2s", flexShrink: 0,
+            }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </Box>
+        </Box>
+      )}
+    </>
+  );
+}
+
+// ── MAIN SITE ──────────────────────────────────
+export default function App() {
+  const [section, setSection] = useState("hero");
+
+  const navItems = [
+    { id: "about",    label: "О проблеме" },
+    { id: "stats",    label: "Цифры" },
+    { id: "threats",  label: "Угрозы" },
+    { id: "timeline", label: "Хроника" },
+    { id: "caspian",  label: "Каспий" },
+  ];
+
+  function scrollTo(id) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  const sectionStyle = { padding: "5rem 2rem", maxWidth: 1100, margin: "0 auto" };
+  const tagStyle = { fontSize: ".68rem", color: C.red, letterSpacing: 4, textTransform: "uppercase", fontFamily: "monospace", display: "flex", alignItems: "center", gap: ".7rem", marginBottom: "1rem" };
+  const h2Style = { fontFamily: "Georgia,serif", fontSize: "clamp(2rem,4vw,3rem)", fontWeight: 900, letterSpacing: 1, marginBottom: "1rem", lineHeight: 1.05 };
+
+  return (
+    <Box style={{ background: C.navy, color: C.white, fontFamily: "'Segoe UI',system-ui,sans-serif", fontWeight: 300, minHeight: "100vh", overflowX: "hidden" }}>
+
+      {/* ── NAV ── */}
+      <Box style={{
+        position: "fixed", top: 0, left: 0, right: 0, zIndex: 500,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: ".9rem 2.5rem",
+        background: "rgba(13,27,42,.92)", backdropFilter: "blur(12px)",
+        borderBottom: "1px solid rgba(230,57,70,.18)",
+      }}>
+        <div style={{ fontFamily: "Georgia,serif", fontWeight: 900, fontSize: "1rem", color: C.red, letterSpacing: 3 }}>☢ КОШКАР-АТА</div>
+        <Box style={{ display: "flex", gap: "2rem" }}>
+          {navItems.map(n => (
+            <button key={n.id} onClick={() => scrollTo(n.id)} style={{
+              background: "none", border: "none", color: C.muted, cursor: "pointer",
+              fontSize: ".72rem", fontWeight: 600, letterSpacing: 1.5, textTransform: "uppercase",
+              transition: "color .2s", padding: 0,
+            }}
+              onMouseEnter={e => e.target.style.color = C.red}
+              onMouseLeave={e => e.target.style.color = C.muted}
+            >{n.label}</button>
+          ))}
+        </Box>
+      </Box>
+
+      {/* ── HERO ── */}
+      <Box id="hero" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", paddingTop: "4rem" }}>
+        {/* bg glow */}
+        <Box style={{ position: "absolute", top: "20%", right: "10%", width: 500, height: 500, borderRadius: "50%", background: `radial-gradient(ellipse, ${C.red}18 0%, transparent 65%)`, pointerEvents: "none" }} />
+        <Box style={{ position: "absolute", bottom: "10%", left: "5%", width: 300, height: 300, borderRadius: "50%", background: `radial-gradient(ellipse, ${C.teal}0a 0%, transparent 70%)`, pointerEvents: "none" }} />
+
+        {/* radiation rings */}
+        <Box style={{ position: "absolute", right: "8%", top: "50%", transform: "translateY(-50%)", width: 420, height: 420, pointerEvents: "none" }}>
+          {[130, 220, 320, 420].map((s, i) => (
+            <Box key={i} style={{
+              position: "absolute", top: "50%", left: "50%",
+              width: s, height: s, borderRadius: "50%",
+              border: `1px solid ${C.red}${["aa","66","44","22"][i]}`,
+              transform: "translate(-50%,-50%)",
+              animation: `ring-pulse 3s ${i * .5}s ease-out infinite`,
+            }} />
+          ))}
+          <Box style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: "2.5rem" }}>☢</Box>
+        </Box>
+
+        <Box style={{ maxWidth: 650, padding: "0 2rem", position: "relative", zIndex: 2 }}>
+          <div style={{ ...tagStyle, marginBottom: "1.5rem" }}>
+            <span style={{ width: 32, height: 1, background: C.red, display: "inline-block" }} />
+            Экологическая катастрофа · Казахстан · 2026
+          </div>
+          <h1 style={{ fontFamily: "Georgia,serif", fontSize: "clamp(3.5rem,9vw,7rem)", fontWeight: 900, lineHeight: .92, letterSpacing: 2, marginBottom: "1.5rem" }}>
+            КОШКАР-<span style={{ color: C.red }}>АТА</span>
+          </h1>
+          <p style={{ fontSize: "1.05rem", color: C.muted, lineHeight: 1.8, maxWidth: 500, marginBottom: "2.5rem" }}>
+            105 миллионов тонн токсичных и радиоактивных отходов. В 8 км от Каспийского моря. В 5 км от города с населением 176 000 человек. Рекультивация идёт уже более 20 лет.
+          </p>
+          <button onClick={() => scrollTo("about")} style={{
+            background: C.red, border: "none", color: "#fff", padding: ".9rem 2rem",
+            fontSize: ".8rem", fontWeight: 700, letterSpacing: 2, textTransform: "uppercase",
+            cursor: "pointer", display: "inline-flex", alignItems: "center", gap: ".6rem",
+            transition: "background .2s",
+          }}
+            onMouseEnter={e => e.currentTarget.style.background = "#c0222f"}
+            onMouseLeave={e => e.currentTarget.style.background = C.red}
+          >
+            Узнать больше
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+          </button>
+        </Box>
+      </Box>
+
+      {/* ── STATS STRIP ── */}
+      <Box id="stats" style={{ display: "flex", flexWrap: "wrap", borderTop: `1px solid ${C.red}33`, borderBottom: `1px solid ${C.red}33` }}>
+        <StatCard num="105" unit="млн тонн" label="общий объём отходов" accent={C.red} />
+        <StatCard num="52"  unit="млн тонн" label="из них радиоактивных" accent={C.red} />
+        <StatCard num="8"   unit="км"        label="до Каспийского моря" accent={C.amber} />
+        <StatCard num="20+" unit="лет"       label="рекультивация без завершения" accent={C.amber} />
+      </Box>
+
+      {/* ── ABOUT ── */}
+      <Box id="about" style={{ background: C.navy2 }}>
+        <Box style={sectionStyle}>
+          <Box style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4rem", alignItems: "center" }}>
+            <Box>
+              <div style={tagStyle}><span style={{ width: 24, height: 1, background: C.red, display: "inline-block" }} />О проблеме</div>
+              <h2 style={h2Style}>Что такое<br />Кошкар-Ата?</h2>
+              {[
+                "Кошкар-Ата — природная котловина в Мангистауской области, превращённая в хвостохранилище Химико-гидрометаллургического завода (ХГМЗ). Десятилетиями сюда сбрасывались отходы обогащения урановых и редкоземельных руд.",
+                "В составе отходов — кобальт, никель, стронций, свинец и радиоактивные элементы. После остановки производства в 1990-х озеро стало пересыхать, превращаясь в источник токсичной пыли.",
+                "Южная часть площадью 13 км² полностью обезвожена. Уровень воды в озере — выше уровня Каспийского моря.",
+              ].map((p, i) => <p key={i} style={{ color: C.muted, lineHeight: 1.85, marginBottom: "1.2rem", fontSize: ".95rem" }}>{p}</p>)}
+              <Box style={{ background: C.card, borderLeft: `3px solid ${C.red}`, padding: "1.2rem 1.5rem", fontFamily: "monospace", fontSize: ".85rem", color: C.amber, lineHeight: 1.65, marginTop: "1.5rem" }}>
+                ⚠ Уровень озера выше Каспия. При прорыве дамбы — 52 млн тонн радиоактивных отходов окажутся в море.
+              </Box>
+            </Box>
+            {/* Visual */}
+            <Box style={{ position: "relative", aspectRatio: "1", background: C.card, border: `1px solid ${C.red}33`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+              {[70,55,40,27].map((s, i) => (
+                <Box key={i} style={{
+                  position: "absolute", width: `${s}%`, height: `${s}%`, borderRadius: "50%",
+                  border: `1px solid ${[C.red, C.amber, C.red, C.teal][i]}${["88","55","33","22"][i]}`,
+                  animation: `ring-pulse 4s ${i * .7}s ease-in-out infinite`,
+                }} />
+              ))}
+              <Box style={{ textAlign: "center", position: "relative", zIndex: 2 }}>
+                <div style={{ fontSize: "3rem" }}>☢</div>
+                <div style={{ fontSize: ".65rem", color: C.muted, letterSpacing: 2, marginTop: ".3rem" }}>МЁРТВОЕ ОЗЕРО</div>
+              </Box>
+              {[["43°N 51°E","Координаты"],["37 км²","Площадь"],["5 км","До Актау"],["8 км","До Каспия"]].map(([v,l], i) => (
+                <Box key={i} style={{
+                  position: "absolute",
+                  ...[{top:"1rem",left:"1rem"},{top:"1rem",right:"1rem",textAlign:"right"},{bottom:"1rem",left:"1rem"},{bottom:"1rem",right:"1rem",textAlign:"right"}][i],
+                  fontFamily: "monospace", fontSize: ".6rem", color: C.muted,
+                }}>
+                  {l}<br/><span style={{ color: C.amber, fontWeight: 700, fontSize: ".8rem" }}>{v}</span>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+
+      {/* ── THREATS ── */}
+      <Box id="threats">
+        <Box style={sectionStyle}>
+          <div style={tagStyle}><span style={{ width: 24, height: 1, background: C.red, display: "inline-block" }} />Угрозы</div>
+          <h2 style={h2Style}>Три вектора катастрофы</h2>
+          <Box style={{ display: "flex", flexWrap: "wrap", gap: "1.2rem", marginTop: "2rem" }}>
+            <ThreatCard icon="☣" accent={C.red} title="Токсичная пыль"
+              body={`Высыхающее дно разносит частицы <strong style="color:${C.amber}">кобальта, никеля, стронция, свинца</strong> на сотни километров. 176 000 жителей Актау — в зоне хронического воздействия.`} />
+            <ThreatCard icon="💧" accent={C.teal} title="Грунтовые воды"
+              body={`Загрязнение проникло в подземные воды месторождения <strong style="color:${C.amber}">Куюлус</strong> — источника питьевой воды Актау. Радиус заражения — 2–4 км.`} />
+            <ThreatCard icon="🌊" accent={C.amber} title="Угроза Каспию"
+              body={`Озеро расположено <strong style="color:${C.amber}">выше уровня Каспия</strong>. При прорыве дамбы 52 млн тонн радиоактивных отходов попадут в море — экологическая катастрофа международного масштаба.`} />
+            <ThreatCard icon="☢" accent={C.red} title="Радиация"
+              body={`Южная часть несёт <strong style="color:${C.amber}">высокий уровень радиации</strong>. Долгоживущие изотопы урана и стронция сохраняют опасность сотни лет без полной рекультивации.`} />
+            <ThreatCard icon="🏛" accent={C.muted} title="20+ лет бездействия"
+              body={`Рекультивация ведётся более 20 лет. Стоимость по ПСД — <strong style="color:${C.amber}">17 млрд тенге</strong>. Завершения нет. Сменилось несколько правительств — проблема осталась.`} />
+            <ThreatCard icon="👁" accent={C.muted} title="Информационная тишина"
+              body={`После <strong style="color:${C.amber}">инцидента 2026 года</strong> (красная вода Каспия у Актау) официальных объяснений не последовало. Большинство казахстанцев не знает о Кошкар-Ата.`} />
+          </Box>
+        </Box>
+      </Box>
+
+      {/* ── TIMELINE ── */}
+      <Box id="timeline" style={{ background: C.navy2 }}>
+        <Box style={sectionStyle}>
+          <div style={tagStyle}><span style={{ width: 24, height: 1, background: C.red, display: "inline-block" }} />Хроника бездействия</div>
+          <h2 style={h2Style}>Как это случилось?</h2>
+          <Box style={{ marginTop: "2.5rem", maxWidth: 800 }}>
+            {[
+              { year:"1950-е", title:"Начало сбросов", body:"Советские заводы начинают сбрасывать отходы урановых руд в природную котловину Кошкар-Ата. Радиационная безопасность населения не учитывается.", highlight:false },
+              { year:"1990-е", title:"Производство остановлено", body:"После распада СССР завод закрыт, рекультивация не начата. Озеро начинает пересыхать. Никто не приступает к ликвидации последствий.", highlight:false },
+              { year:"2000-е", title:"Учёные бьют тревогу", body:"Международные организации фиксируют: обнажённое дно создаёт мощный источник токсичной пыли. Подземные воды заражены.", highlight:false },
+              { year:"2017",   title:"ПСД разработана — 17 млрд тенге", body:"Разработана проектно-сметная документация. Стоимость рекультивации — 17 млрд тенге. Работы начаты, но тянутся без завершения.", highlight:false },
+              { year:"ФЕВРАЛЬ 2026", title:"Каспий краснеет", body:"Берег Каспийского моря у Актау окрашивается в красно-бурый цвет. Официальных объяснений не дано. Связь с Кошкар-Ата не опровергнута.", highlight:true },
+            ].map((ev, i, arr) => (
+              <TimelineItem key={i} {...ev} isLast={i === arr.length - 1} />
+            ))}
+          </Box>
+        </Box>
+      </Box>
+
+      {/* ── CASPIAN ── */}
+      <Box id="caspian">
+        <Box style={sectionStyle}>
+          <div style={tagStyle}><span style={{ width: 24, height: 1, background: C.red, display: "inline-block" }} />Каспийское море</div>
+          <h2 style={h2Style}>Бомба замедленного действия</h2>
+          <Box style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: "4rem", marginTop: "2rem", alignItems: "start" }}>
+            <Box>
+              {[
+                "Каспийское море — крупнейшее замкнутое водное тело на Земле. На его берегах живут миллионы людей в пяти странах. Это уникальная экосистема с сотнями эндемичных видов.",
+                "Хвостохранилище Кошкар-Ата расположено в 8 км от Каспия. Уровень воды в озере выше уровня моря. Барьер между 52 млн тонн радиоактивных отходов и Каспием — узкая береговая полоса и ветхая дамба советской постройки.",
+                "Токсичные вещества уже проникают в подземные воды, питающие побережье. Масштаб этого заражения до сих пор не изучен.",
+              ].map((p, i) => <p key={i} style={{ color: C.muted, lineHeight: 1.85, marginBottom: "1.2rem", fontSize: ".95rem" }}>{p}</p>)}
+              <Box style={{ background: `${C.red}18`, border: `1px solid ${C.red}55`, padding: "1.4rem 1.8rem", position: "relative", marginTop: "1.5rem" }}>
+                <Box style={{ position: "absolute", top: "-.6rem", left: "1.2rem", background: C.red, padding: ".15rem .6rem", fontSize: ".6rem", fontWeight: 700, letterSpacing: 2, color: "#fff" }}>⚠ ИНЦИДЕНТ</Box>
+                <p style={{ color: C.white, fontSize: ".88rem", lineHeight: 1.7, margin: 0 }}>
+                  <strong>Февраль 2026 года.</strong> Вода и берег Каспийского моря у Актау окрасились в красно-бурый цвет. Власти не дали официального объяснения. Связь с Кошкар-Ата не была ни подтверждена, ни опровергнута.
+                </p>
+              </Box>
+              {/* Risk meters */}
+              <Box style={{ background: C.card, padding: "1.5rem", marginTop: "2rem" }}>
+                <div style={{ fontFamily: "monospace", fontSize: ".68rem", color: C.red, letterSpacing: 3, marginBottom: "1.2rem" }}>// УРОВЕНЬ РИСКОВ</div>
+                {[
+                  { label: "Риск заражения Каспия", val: 92, c: C.red },
+                  { label: "Заражение грунтовых вод", val: 75, c: C.red },
+                  { label: "Токсичная пыль", val: 80, c: C.amber },
+                  { label: "Прогресс рекультивации", val: 22, c: C.teal },
+                ].map(r => (
+                  <Box key={r.label} style={{ marginBottom: "1rem" }}>
+                    <Box style={{ display: "flex", justifyContent: "space-between", fontSize: ".75rem", color: C.muted, marginBottom: ".35rem" }}>
+                      <span>{r.label}</span><span style={{ color: C.white, fontWeight: 700 }}>{r.val}%</span>
+                    </Box>
+                    <Box style={{ height: 5, background: "rgba(255,255,255,.07)", borderRadius: 3 }}>
+                      <Box style={{ width: `${r.val}%`, height: "100%", background: r.c, borderRadius: 3, transition: "width 1s ease" }} />
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+            {/* Sidebar facts */}
+            <Box>
+              {[
+                { title:"// Ключевые факты", accent: C.teal, rows:[
+                  ["До Каспия", "8 км", C.red],
+                  ["Радиоакт. отходов", "52 млн т", C.red],
+                  ["Общий объём", "105 млн т", C.white],
+                  ["Обезвоженная зона", "13 км²", C.amber],
+                  ["Население Актау", "176 000", C.white],
+                  ["Стоимость рекульт.", "17 млрд ₸", C.amber],
+                ]},
+                { title:"// Состав отходов", accent: C.red, rows:[
+                  ["Уран (остаточный)", "☢ есть", C.red],
+                  ["Стронций-90", "☢ есть", C.red],
+                  ["Кобальт", "токсичен", C.amber],
+                  ["Никель", "токсичен", C.amber],
+                  ["Свинец", "токсичен", C.amber],
+                  ["Фосфогипсы", "присутствуют", C.muted],
+                ]},
+              ].map(card => (
+                <Box key={card.title} style={{ background: C.card, border: `1px solid ${card.accent}33`, padding: "1.5rem", marginBottom: "1.5rem" }}>
+                  <div style={{ fontFamily: "monospace", fontSize: ".72rem", color: card.accent, letterSpacing: 2, marginBottom: "1rem" }}>{card.title}</div>
+                  {card.rows.map(([l,v,vc]) => (
+                    <Box key={l} style={{ display: "flex", justifyContent: "space-between", padding: ".5rem 0", borderBottom: "1px solid rgba(255,255,255,.05)", fontSize: ".78rem" }}>
+                      <span style={{ color: C.muted }}>{l}</span>
+                      <span style={{ color: vc, fontWeight: 700, fontFamily: "monospace" }}>{v}</span>
+                    </Box>
+                  ))}
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+
+      {/* ── FOOTER ── */}
+      <Box style={{ background: "#080f18", borderTop: `1px solid ${C.red}22`, padding: "3rem 2.5rem", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "2rem" }}>
+        <Box>
+          <div style={{ fontFamily: "Georgia,serif", fontSize: "2rem", fontWeight: 900, color: C.red, letterSpacing: 3, marginBottom: ".5rem" }}>КОШКАР-АТА</div>
+          <div style={{ fontSize: ".82rem", color: C.muted, maxWidth: 380, lineHeight: 1.7 }}>
+            Экологическая безопасность — это вопрос национальной безопасности Казахстана. Проблема, о которой молчат, не перестаёт существовать.
+          </div>
+        </Box>
+        <Box style={{ textAlign: "right" }}>
+          <div style={{ fontFamily: "monospace", fontSize: ".65rem", color: C.red, letterSpacing: 2, marginBottom: ".7rem" }}>// ИСТОЧНИКИ</div>
+          {["bezrao.ru", "ecocitizens.kz", "dknews.kz", "exclusive.kz", "Wikimapia"].map(s => (
+            <div key={s} style={{ fontSize: ".72rem", color: C.muted, lineHeight: 1.9 }}>— {s}</div>
+          ))}
+        </Box>
+        <Box style={{ width: "100%", paddingTop: "1.5rem", borderTop: "1px solid rgba(255,255,255,.05)", textAlign: "center", fontSize: ".65rem", color: "rgba(123,150,178,.4)", letterSpacing: 2, fontFamily: "monospace" }}>
+          КАЗАХСТАН · МАНГИСТАУСКАЯ ОБЛАСТЬ · АКТАУ · 2026
+        </Box>
+      </Box>
+
+      {/* ── CHATBOT ── */}
+      <ChatBot />
+
+      <style>{`
+        @keyframes ring-pulse { 0%{opacity:.85;transform:scale(.97)} 100%{opacity:0;transform:scale(1.05)} }
+        * { scrollbar-width: thin; scrollbar-color: rgba(230,57,70,.2) transparent; }
+        input { color-scheme: dark; }
+        input::placeholder { color: #4a6070 !important; }
+      `}</style>
+    </Box>
+  );
+}
